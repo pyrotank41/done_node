@@ -9,6 +9,7 @@
 # generic imports
 from concurrent.futures import Executor
 import time
+from xmlrpc.client import Boolean
 
 # ros pkg imports
 import rclpy
@@ -64,8 +65,6 @@ class DroneNode(Node):
                                                     callback_group= offboard_heartbeat_cbg)
         
         # our maiun publisher
-        # self.our_main_pub = self.create_publisher(String, 'main_pub', 10, callback_group=drone_cb_group)
-        self.timer = self.create_timer(1, self.main_callback, callback_group=drone_cb_group)
         self.heartbeat_offboard_control = self.create_timer(0.05, self.offboard_heartbeat, callback_group = offboard_heartbeat_cbg)
 
         # creating message variables
@@ -78,6 +77,8 @@ class DroneNode(Node):
         self.verbose = False
         self.heartbeat_num = 0
         
+        
+        self.main_loop = self.create_timer(1, self.main_callback_loop, callback_group=drone_cb_group)
 
 
     def run(self):
@@ -98,9 +99,10 @@ class DroneNode(Node):
         self.heartbeat_num += 1
         self.publish_offboard_control_mode('position')
         self.publish_trejectory_setpoint_position(self.setpoint)
-    
 
-    def main_callback(self):
+
+
+    def main_callback_loop(self):
         while self.time.timestamp == 0:
 
             print(".", end="")
@@ -118,20 +120,22 @@ class DroneNode(Node):
         self.arm()
         time.sleep(1)
 
-        while self.status.arming_state != 2:
-            time.sleep(1)
-        print("# Armed ....")
 
         # takeoff
-        self.setpoint = (0.0, 0.0, -5.0)
-        time.sleep(1)
-        while True:
-            self.setpoint = (0.0, 0.0, 0.0)
-            time.sleep(2)
-            self.setpoint = (0.0, 0.0, -5.0)
-            time.sleep(2)
+        self.takeoff_altitude = -20.0
+
+        self.takeoff()
+
+        time.sleep(3)
+
+        self.land()
+
+        time.sleep(10000)
+        # self.arm(False)
+        # self.timer.destroy()
 
 
+    ## vehicle status call backs ---------------------------------------------------------------------------------------------
 
     def vehicle_control_mode_sub_callback(self, msg:VehicleControlMode):
         
@@ -148,8 +152,11 @@ class DroneNode(Node):
 
     def odom_sub_callback(self, msg:VehicleOdometry):
         if self.verbose: print("odom_sub_Callback")
-        self.odom_sub_last_message = msg
+        self.odom = msg
         pass
+
+
+    ## vehicle control helper functions ----------------------------------------------------------------------------------------
 
     def engage_offboard_mode(self):
         # allow offboard control message to be utilized
@@ -163,17 +170,38 @@ class DroneNode(Node):
         self.publish_vehicle_cmd(cmd_msg) 
 
 
-    def arm(self):
+    def arm(self, state: Boolean = True ):
         # print("# Arming vehicle...")
         cmd_msg = VehicleCommand()
         cmd_msg.command = VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM
-        cmd_msg.param1 = float(1)
+        cmd_msg.param1 = float(state)
         self.publish_vehicle_cmd(cmd_msg)
+        
+        while self.status.arming_state != 2:
+            print(".", end="")
+            time.sleep(1)
+        
+        print("\n# Armed ....")
+
+    def takeoff(self):
+
+        self.setpoint = (0.0, 0.0, self.takeoff_altitude)
+        while abs(self.odom.z) < abs(self.takeoff_altitude*0.95):
+            time.sleep(0.5)
+        
+        print("reached takeoff altitude...")
+        
         
     def land(self):
         cmd_msg = VehicleCommand()
-        cmd_msg.cmmand = VehicleCommand.VEHICLE_CMD_NAV_LAND
+        cmd_msg.command = VehicleCommand.VEHICLE_CMD_NAV_LAND
         self.publish_vehicle_cmd(cmd_msg)
+        print("## Landing ...")
+        while abs(self.odom.z) < 0.5:
+            time.sleep(1)
+        
+        print("## ... Landed")
+
 
     def publish_offboard_control_mode(self, control_type:String):
         

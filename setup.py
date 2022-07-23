@@ -23,9 +23,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'track_node = drone_tracker.track_node:main_entrypoint',
-            'gimbal_tracker_node = drone_tracker.gimble_tracker_node:main',
-            'drone_node = drone_tracker.drone_node:main',
+            f'track_node = {package_name}.track_node:main_entrypoint',
+            f'gimbal_tracker_node = {package_name}.gimble_tracker_node:main',
+            f'drone_node = {package_name}.drone_node:main',
             
         ],
     },

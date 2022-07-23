@@ -2,7 +2,7 @@ from setuptools import setup
 import os
 from glob import glob
 
-package_name = 'drone_tracker'
+package_name = 'drone_node'
 
 setup(
     name=package_name,

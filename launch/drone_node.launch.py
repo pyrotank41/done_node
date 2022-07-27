@@ -21,7 +21,7 @@ def generate_launch_description():
     #world = os.path.join(px4_sitl_gazebo_dir, 'worlds','typhoon_h480.world')
     world = '/home/karan/my_ws/sim_ws/worlds/typhoon_h480.world'
     # model = '/home/karan/my_ws/models/typhoon_h480/typhoon_h480.sdf'
-    model = '/home/karan/my_ws/sim_ws/models/typhoon_h480/typhoon_h480.sdf'
+    model = '/home/karan/my_ws/sim_ws/models/typhoon_h480_custom/typhoon_h480_custom.sdf'
     # my_ws = HOME + "/my_ws/"
     
     # model = os.path.join(my_ws, 'models', 'typhoon_h480', 'typhoon_h480.sdf')
@@ -55,9 +55,9 @@ def generate_launch_description():
                               'world': LaunchConfiguration('world'),
                               'verbose': 'true'}.items(),
         ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([gazebo_launch_dir, '/gzclient.launch.py'])
-        ),
+        # IncludeLaunchDescription(
+        #     PythonLaunchDescriptionSource([gazebo_launch_dir, '/gzclient.launch.py'])
+        # ),
 
         ExecuteProcess(
             cmd=[

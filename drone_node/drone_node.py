@@ -7,9 +7,8 @@
 # imports -----------------------------------------------------------------------------------------------------------------------------------
 
 # generic imports
-from concurrent.futures import Executor
 import time
-from xmlrpc.client import Boolean
+import math
 
 # ros pkg imports
 import rclpy
@@ -21,8 +20,16 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
 # message imports
-from px4_msgs.msg import OffboardControlMode, VehicleStatus, Timesync, VehicleOdometry,TrajectorySetpoint,VehicleCommand, VehicleControlMode
+from px4_msgs.msg import OffboardControlMode, VehicleStatus, Timesync, VehicleOdometry, \
+                            TrajectorySetpoint, VehicleCommand, VehicleControlMode, LandingGear, \
+                            GimbalManagerSetManualControl, GimbalDeviceAttitudeStatus
+from ros2_aruco_interfaces.msg import ArucoMarkers
 from std_msgs.msg import String
+
+
+#import temp packages
+import pygame
+
 
 
 # classes -------------------------------------------------------------------------------------------------------------------------------------
@@ -32,6 +39,7 @@ class DroneNode(Node):
 
         super().__init__('drone_node')
 
+        self.drone_cbg = drone_cb_group
 
         # subscribers topic for info from UAV system
         self.status_sub = self.create_subscription(VehicleStatus, "/fmu/vehicle_status/out", 
@@ -54,6 +62,12 @@ class DroneNode(Node):
                                                         qos_profile_sensor_data,
                                                         callback_group=rtps_cb_group )
 
+        self.gimbal_device_atiude_status   = self.create_subscription(GimbalDeviceAttitudeStatus, "/fmu/gimbal_device_attitude_status/out",
+                                                        self.gimbal_device_atiude_status_cb, 
+                                                        2,
+                                                        callback_group=rtps_cb_group )
+        
+
         # control communication
         self.control_mode_pub= self.create_publisher(OffboardControlMode, "/fmu/offboard_control_mode/in", 10, 
                                                     callback_group= offboard_heartbeat_cbg)
@@ -63,80 +77,202 @@ class DroneNode(Node):
 
         self.cmd_pub         = self.create_publisher(VehicleCommand, "/fmu/vehicle_command/in", 10,
                                                     callback_group= offboard_heartbeat_cbg)
+
+        self.landing_gear = self.create_publisher(LandingGear, "/fmu/landing_gear/in", 10,
+                                                    callback_group= offboard_heartbeat_cbg)
+
+        self.gimbal_manager_set_manual_control = self.create_publisher(GimbalManagerSetManualControl, "/fmu/gimbal_manager_set_manual_control/in", 10,
+                                                    callback_group= offboard_heartbeat_cbg)
+
+
         
-        # our maiun publisher
+        
+        # our main publisher to keep the connection alive between offboard and flight computer
         self.heartbeat_offboard_control = self.create_timer(0.05, self.offboard_heartbeat, callback_group = offboard_heartbeat_cbg)
 
-        # creating message variables
+        # creating message variables, callbacks will update these variables
         self.status = VehicleStatus()
         self.time = Timesync()
         self.odom = VehicleOdometry()
         self.vehicle_control_mode = VehicleControlMode()
         
+
         self.setpoint = (0.0, 0.0, 0.0)
         self.verbose = False
         self.heartbeat_num = 0
+        self.takeoff_altitude = -3.0
+
+        self.control_mode = 'position'
+        self.pitch = float(-45) #deg
+        self.yaw = float(0)     #deg
+
+
+        pygame.init()
+        self.window = pygame.display.set_mode((300, 300))
         
-        
-        self.main_loop = self.create_timer(1, self.main_callback_loop, callback_group=drone_cb_group)
+        self.main_loop = self.create_timer(0.01, self.main_callback_loop, callback_group=drone_cb_group)
 
-
-    def run(self):
-        while True:
-            print(f"in run {self.status.arming_state}")
-            time.sleep(1)
-
-    # https://docs.px4.io/main/en/msg_docs/vehicle_status.html
-    def status_sub_callback(self, msg:VehicleStatus):
-        if self.verbose: print("status sub callback")
+    # calback function to keep connection with the flight controller alive
+    # this callback is running on a different calback group to avoid deadlocks and delays
     
-        if self.status.arming_state != msg.arming_state:
-            print(f"armed state changed from {self.status.arming_state} to {msg.arming_state}")
-
-        self.status = msg
-
     def offboard_heartbeat(self):
+
+        # TODO: for some reason the drone is not disarming after landing, could the heartbeat be a problem?
         self.heartbeat_num += 1
-        self.publish_offboard_control_mode('position')
+        self.publish_offboard_control_mode(self.control_mode)
         self.publish_trejectory_setpoint_position(self.setpoint)
 
 
-
     def main_callback_loop(self):
-        while self.time.timestamp == 0:
+        # testing features using keyboard input
+        self.pygame_control()
 
-            print(".", end="")
-            time.sleep(0.001)
+    def yaw_pitch_check(self, yaw, pitch):
+        if yaw >= 360:
+            yaw = yaw - 360
+            
+        if  yaw <= 0:
+            yaw = 360 - yaw  
+
+        if pitch <= -90:
+            pitch = -89.9
+        if pitch >= 45:
+            pitch = 45
+
+        return yaw, pitch
+
+    
+    def pygame_control(self):
+        # While being in air and landing mode the drone is not likely to takeoff again, so
+        # a condition check is required here to avoid such a condition.
+
+        events = pygame.event.get()
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_t and event.key == pygame.K_LCTRL:
+                    print("ctrl + t pressed")
+                if event.key == pygame.K_l:
+                    print("l pressed")
         
-        print("\n... Got initial vehicle status ...")
-        print("... starting flow of control messages ...\n")
-        time.sleep(1)
+        keys = pygame.key.get_pressed()
+
+        if keys[pygame.K_t] and keys[pygame.K_LCTRL]:
+            # arm and takeoff
+            print('ctrl+t Pressed')
+            self.engage_offboard_mode()
+            self.arm()
+            self.takeoff()
+            time.sleep(0.5)
         
-        # necessary:  offboard_control_mode needs to be paired with trajectory_setpoint
-        while self.heartbeat_num < 10:
+        if keys[pygame.K_l] and keys[pygame.K_LCTRL]:
+            # land at current position
+            print("ctrl +l Pressed")
+            self.land()
+            time.sleep(0.5)
+
+        # gimbal control
+        if keys[pygame.K_a] or keys[pygame.K_s] or keys[pygame.K_d] or keys[pygame.K_w]: 
+            
+            pitch, yaw = self.pitch, self.yaw
+            step = 1
+
+            if keys[pygame.K_d]:
+                yaw, pitch = self.yaw_pitch_check(yaw + step, pitch)   
+
+            if keys[pygame.K_a]:
+                yaw, pitch = self.yaw_pitch_check(yaw - step, pitch)
+
+            if keys[pygame.K_w]:
+                yaw, pitch = self.yaw_pitch_check(yaw, pitch + step)
+
+            if keys[pygame.K_s]:
+                yaw, pitch = self.yaw_pitch_check(yaw, pitch - step)
+
+            self.pitch, self.yaw = pitch, yaw
+            self.publish_gimbal_cmd(pitch, yaw)
+            time.sleep(0.1)
+
+            print(f"pitch: {self.pitch}, yaw: {self.yaw}")
+            print(f"gpitch: {self.gimbal_pitch}, gyaw: {self.gimbal_yaw}")
+
+
+        if keys[pygame.K_f]:
+            self.get_logger().info("aruco_tracking_mode")
+            self.aruco_track()
             time.sleep(1)
 
-        self.engage_offboard_mode()
-        self.arm()
-        time.sleep(1)
+    def aruco_track(self):
+        self.aruco_sub = self.create_subscription(ArucoMarkers, "/drone/ros2_aruco/aruco_markers",
+                                                        self.aruco_sub_cb, 
+                                                        qos_profile_sensor_data,
+                                                        callback_group=self.drone_cbg)
+        
+        pass
+
+    def get_desired_gimble_angles(self, x, y, distance_2d_x, distance_2d_y):
+        gimbal_yaw_error = math.degrees(math.atan(x/distance_2d_x)) # in deg
+        gimbal_pitch_error = math.degrees(math.atan(y/distance_2d_y)) # in deg
+       
+        yaw = self.gimbal_yaw + gimbal_yaw_error
+        pitch = self.gimbal_pitch - gimbal_pitch_error
+
+        yaw, pitch = self.yaw_pitch_check(yaw, pitch)
+        print(gimbal_pitch_error, self.gimbal_pitch, pitch)
+
+        return yaw, pitch
+
+    def aruco_sub_cb(self, msg):
+        # get current position the marker at 0th index
+        position = msg.poses[0].position
+
+        #  
+        aruco_height = -2.25 #Meters
+        z = self.odom.z - aruco_height
+
+        distance_2d_x = math.sqrt(position.x**2 + position.z**2)
+        distance_2d_y = math.sqrt(position.y**2 + position.z**2)
+
+        yaw, pitch = self.get_desired_gimble_angles(position.x, position.y, distance_2d_x, distance_2d_y)
+
+        
+        self.publish_gimbal_cmd(pitch, yaw)
 
 
-        # takeoff
-        self.takeoff_altitude = -20.0
+        # print(position.x , position.y, position.z)
+        pass
 
-        self.takeoff()
+    def euler_from_quaternion(self, x, y, z, w):
+        """
+        Convert a quaternion into euler angles (roll, pitch, yaw)
+        roll is rotation around x in deg (counterclockwise)
+        pitch is rotation around y in deg (counterclockwise)
+        yaw is rotation around z in deg (counterclockwise)
 
-        time.sleep(3)
-
-        self.land()
-
-        time.sleep(10000)
-        # self.arm(False)
-        # self.timer.destroy()
+        TODO: this conversion function is tested for yaw and pitch but not yet for roll
+        """
+        t0 = +2.0 * (w * x + y * z)
+        t1 = +1.0 - 2.0 * (x * x + y * y)
+        yaw_z =  (math.degrees(math.atan2(t0, t1)) -180) * -1
+     
+        t2 = +2.0 * (w * y - z * x)
+        t2 = +1.0 if t2 > +1.0 else t2
+        t2 = -1.0 if t2 < -1.0 else t2
+        pitch_y = -1 * math.degrees(math.asin(t2))
+     
+        t3 = +2.0 * (w * z + x * y)
+        t4 = +1.0 - 2.0 * (y * y + z * z)
+        roll_x = math.degrees(math.atan2(t3, t4))
+     
+        return roll_x, pitch_y, yaw_z # in degrees
 
 
     ## vehicle status call backs ---------------------------------------------------------------------------------------------
 
+    def gimbal_device_atiude_status_cb(self, msg:GimbalDeviceAttitudeStatus):
+        q = msg.q
+        self.gimbal_roll, self.gimbal_pitch, self.gimbal_yaw = self.euler_from_quaternion(q[0], q[1], q[2], q[3])
+
+        
     def vehicle_control_mode_sub_callback(self, msg:VehicleControlMode):
         
         if self.vehicle_control_mode.flag_control_offboard_enabled != msg.flag_control_offboard_enabled:
@@ -155,53 +291,74 @@ class DroneNode(Node):
         self.odom = msg
         pass
 
+    # https://docs.px4.io/main/en/msg_docs/vehicle_status.html
+    def status_sub_callback(self, msg:VehicleStatus):
+        if self.verbose: print("status sub callback")
+    
+        if self.status.arming_state != msg.arming_state:
+            print(f"armed state changed from {self.status.arming_state} to {msg.arming_state}")
+
+        self.status = msg
+
 
     ## vehicle control helper functions ----------------------------------------------------------------------------------------
 
     def engage_offboard_mode(self):
         # allow offboard control message to be utilized
+        self.get_logger().info("## Engaging offboard mode ...")
         cmd_msg = VehicleCommand()
 
         cmd_msg.command = VehicleCommand.VEHICLE_CMD_DO_SET_MODE 
         cmd_msg.param1 = 1.0
         cmd_msg.param2 = 6.0
 
-        # print("# Engaging offboard mode ...")
-        self.publish_vehicle_cmd(cmd_msg) 
+        
+        self.publish_vehicle_cmd(cmd_msg)
 
+        # TODO: add a time out here, in case the drone is not ready and the command was issued, this will reasult in a dead lock
+        while self.vehicle_control_mode.flag_control_offboard_enabled is False:
+            time.sleep(1)
+        
+        self.get_logger().info("... Engaged offboard mode")
+        
+        time.sleep(1) 
 
-    def arm(self, state: Boolean = True ):
-        # print("# Arming vehicle...")
+    def arm(self, state=True ):
+
+        self.get_logger().info("## Arming vehicle...")
         cmd_msg = VehicleCommand()
         cmd_msg.command = VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM
         cmd_msg.param1 = float(state)
         self.publish_vehicle_cmd(cmd_msg)
         
         while self.status.arming_state != 2:
-            print(".", end="")
             time.sleep(1)
         
-        print("\n# Armed ....")
+        self.get_logger().info("## Armed ....")
 
     def takeoff(self):
 
+        self.get_logger().info("## Taking off")
         self.setpoint = (0.0, 0.0, self.takeoff_altitude)
         while abs(self.odom.z) < abs(self.takeoff_altitude*0.95):
             time.sleep(0.5)
         
-        print("reached takeoff altitude...")
+        self.set_landing_gear_state(True)
         
+        self.get_logger().info("Reached takeoff altitude...")
+
+    def set_landing_gear_state(self, state):
+        landing_gear_msg = LandingGear()
+        landing_gear_msg.timestamp = self.time.timestamp
+        landing_gear_msg.landing_gear = state
+        self.landing_gear.publish(landing_gear_msg)
         
     def land(self):
+
+        print("## Landed ...")
         cmd_msg = VehicleCommand()
         cmd_msg.command = VehicleCommand.VEHICLE_CMD_NAV_LAND
-        self.publish_vehicle_cmd(cmd_msg)
-        print("## Landing ...")
-        while abs(self.odom.z) < 0.5:
-            time.sleep(1)
-        
-        print("## ... Landed")
-
+        self.publish_vehicle_cmd(cmd_msg) 
 
     def publish_offboard_control_mode(self, control_type:String):
         
@@ -248,6 +405,27 @@ class DroneNode(Node):
         msg.from_external= True
        
         self.cmd_pub.publish(msg)
+    
+    def convert_deg_to_rad(self, pitch_deg:float, yaw_deg:float):
+        pitch_rad = (math.pi/180)*pitch_deg
+        yaw_rad = (math.pi/180)*yaw_deg
+        return pitch_rad, yaw_rad
+
+    def publish_gimbal_cmd(self, pitch:float, yaw:float):
+        pitch, yaw = self.convert_deg_to_rad(pitch, yaw)
+        gimbal_msg = GimbalManagerSetManualControl()
+        gimbal_msg.origin_sysid = 0
+        gimbal_msg.origin_compid = 0
+        gimbal_msg.target_system = 0
+        gimbal_msg.target_component = 0
+        gimbal_msg.flags = 12
+        gimbal_msg.gimbal_device_id = 0
+        gimbal_msg.pitch = pitch
+        gimbal_msg.yaw = yaw
+        gimbal_msg.pitch_rate = 0.785398 # 60 deg/sec
+        gimbal_msg.yaw_rate = 0.785398 # 60 deg/sec 
+        self.gimbal_manager_set_manual_control.publish(gimbal_msg)
+
 
 
 def main():
@@ -271,6 +449,9 @@ def main():
     
     except KeyboardInterrupt:
         node.get_logger().info("KeyboardInterrupt, shutting down :)")
+    
+    except Exception as e:
+        node.get_logger().error(e)
 
     node.destroy_node()
     rclpy.shutdown()

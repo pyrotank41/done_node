@@ -100,11 +100,15 @@ class DroneNode(Node):
         self.setpoint = (0.0, 0.0, 0.0)
         self.verbose = False
         self.heartbeat_num = 0
-        self.takeoff_altitude = -3.0
+        self.takeoff_altitude = -5.0
 
         self.control_mode = 'position'
         self.pitch = float(-45) #deg
         self.yaw = float(0)     #deg
+
+        self.gimbal_pitch = 0
+        self.gimbal_yaw = 0
+        self.gimbal_roll = 0
 
 
         pygame.init()
@@ -386,12 +390,12 @@ class DroneNode(Node):
 
         self.control_mode_pub.publish(mode_msg)
 
-    def publish_trejectory_setpoint_position(self,  point):
+    def publish_trejectory_setpoint_position(self,  point, yaw =  -3.14):
         #  used to send a setpoint position
         setpoint_msg = TrajectorySetpoint()
         setpoint_msg.timestamp = self.time.timestamp
         setpoint_msg.position = point
-        setpoint_msg.yaw = -3.14
+        setpoint_msg.yaw = yaw
         
         self.setpoint_pub.publish(setpoint_msg)
 
@@ -422,8 +426,8 @@ class DroneNode(Node):
         gimbal_msg.gimbal_device_id = 0
         gimbal_msg.pitch = pitch
         gimbal_msg.yaw = yaw
-        gimbal_msg.pitch_rate = 0.785398 # 60 deg/sec
-        gimbal_msg.yaw_rate = 0.785398 # 60 deg/sec 
+        gimbal_msg.pitch_rate = 0.1 # 60 deg/sec
+        gimbal_msg.yaw_rate = 0.7 # 60 deg/sec 
         self.gimbal_manager_set_manual_control.publish(gimbal_msg)
 
 

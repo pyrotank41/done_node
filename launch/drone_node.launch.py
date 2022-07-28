@@ -55,9 +55,9 @@ def generate_launch_description():
                               'world': LaunchConfiguration('world'),
                               'verbose': 'true'}.items(),
         ),
-        # IncludeLaunchDescription(
-        #     PythonLaunchDescriptionSource([gazebo_launch_dir, '/gzclient.launch.py'])
-        # ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource([gazebo_launch_dir, '/gzclient.launch.py'])
+        ),
 
         ExecuteProcess(
             cmd=[

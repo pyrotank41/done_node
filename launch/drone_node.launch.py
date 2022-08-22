@@ -12,6 +12,10 @@ from launch_ros.actions import Node
 def generate_launch_description():
     """Launch Gazebo with a drone running PX4 communicating over ROS 2."""
     HOME = os.environ.get('HOME')
+    WORK_DIR = HOME + "/my_ws"
+    print(f"HOME directory= {HOME}; WORK_DIR = {WORK_DIR}")
+
+
     PX4_RUN_DIR = HOME + '/tmp/px4_run_dir'
     gazebo_launch_dir = os.path.join(get_package_share_directory('gazebo_ros'), 'launch')
 
@@ -19,9 +23,9 @@ def generate_launch_description():
     # px4_sitl_gazebo_dir = HOME + "/my_ws/PX4_Autopilot/Tools/sitl_gazebo" 
   
     #world = os.path.join(px4_sitl_gazebo_dir, 'worlds','typhoon_h480.world')
-    world = '/home/karan/my_ws/sim_ws/worlds/typhoon_h480.world'
+    world = HOME +'/my_ws/sim_ws/worlds/typhoon_h480.world'
     # model = '/home/karan/my_ws/models/typhoon_h480/typhoon_h480.sdf'
-    model = '/home/karan/my_ws/sim_ws/models/typhoon_h480_custom/typhoon_h480_custom.sdf'
+    model = HOME +'/my_ws/sim_ws/models/typhoon_h480_custom/typhoon_h480_custom.sdf'
     # my_ws = HOME + "/my_ws/"
     
     # model = os.path.join(my_ws, 'models', 'typhoon_h480', 'typhoon_h480.sdf')
@@ -75,8 +79,6 @@ def generate_launch_description():
             prefix="bash -c 'sleep 5s; $0 $@'",
             output='screen'),
         
-          
-            
         ExecuteProcess(
             cmd=[
                 HOME + '/my_ws/PX4-Autopilot/build/px4_sitl_rtps/bin/px4',
@@ -89,9 +91,9 @@ def generate_launch_description():
         
         Node(
             package='ros2_aruco',
-            node_namespace='drone',
-            node_executable='aruco_node',
-            node_name='aruco',
+            namespace='drone',
+            executable='aruco_node',
+            name='aruco',
         ),
 
 
